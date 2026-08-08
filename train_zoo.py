@@ -29,6 +29,10 @@ from supersuit.vector.sb3_vector_wrapper import SB3VecEnvWrapper
 
 from bluesky_zoo.competition_v0 import CompetitionZooEnv
 
+# For logging with Weights & Biases (wandb)
+import wandb
+from wandb.integration.sb3 import WandbCallback
+
 
 class FlattenObs(BaseParallelWrapper):
     """Flatten each agent's Dict observation into a 1-D Box.
@@ -65,6 +69,7 @@ EVAL_EPISODES = 12   # per-agent episodes to average over
 MODEL_PATH = "ppo_competition"
 
 
+
 def make_vec_env():
     env = CompetitionZooEnv(render_mode=None, n_agents=N_AGENTS)
     env = FlattenObs(env)          # Dict obs -> flat Box, so plain MlpPolicy works
@@ -97,23 +102,61 @@ def main(total_timesteps):
 
     venv = make_vec_env()
 
+    # WandB logging setup
+    config_wandb = {
+        "policy_type": "MlpPolicy",
+        "total_timesteps": total_timesteps,
+        "env_name": "CompetitionZooEnv",
+        "seed": SEED,
+        "n_steps": 512,
+        "batch_size": 128,
+        "gae_lambda": 0.95,
+        "gamma": 0.99,
+        "learning_rate": 3e-4,
+        "ent_coef": 0.0,
+        "policy_kwargs": dict(net_arch=[64, 64]),
+    }
+
+    run = wandb.init(
+        project="bluesky marl competition",
+        config=config_wandb, 
+        sync_tensorboard=True,
+        #monitor_gym=True,
+        #save_code=True,
+        )
+
+
+    MODEL_PATH = f"models/{config_wandb['env_name']}/{run.id}"
+
     # Reference value before training to compare against
     base_mean, base_std = evaluate(venv, EVAL_EPISODES)
     print(f"\nBEFORE (random policy):  mean episode return = {base_mean:8.2f} +/- {base_std:.2f}")
 
     # Define and train model
     model = PPO(
-        "MlpPolicy", venv,
-        n_steps=512, batch_size=128, gae_lambda=0.95, gamma=0.99,
-        learning_rate=3e-4, ent_coef=0.0,
-        policy_kwargs=dict(net_arch=[64, 64]),
+        config_wandb["policy_type"], 
+        venv,
+        n_steps=config_wandb["n_steps"],
+        batch_size=config_wandb["batch_size"],
+        gae_lambda=config_wandb["gae_lambda"],
+        gamma=config_wandb["gamma"],
+        learning_rate=config_wandb["learning_rate"], 
+        ent_coef=config_wandb["ent_coef"],
+        policy_kwargs=config_wandb["policy_kwargs"],
         verbose=1,
+        tensorboard_log=f"runs/{config_wandb['env_name']}/{run.id}"
     )
-    model.learn(total_timesteps=total_timesteps, progress_bar=False)
+    model.learn(total_timesteps=total_timesteps, progress_bar=False, callback=WandbCallback()) # use model_save_path arguments if you want to save model checkpoints during training
     model.save(MODEL_PATH)
 
     # After training evaluation and comparisson against random policy
     trained_mean, trained_std = evaluate(venv, EVAL_EPISODES, model=model)
+    metrics = {"eval/trained_mean": trained_mean, 
+                  "eval/trained_std": trained_std,}
+    run.log(metrics)
+    run.finish()
+
+
     print(f"\nBEFORE (random policy):        mean episode return = {base_mean:8.2f} +/- {base_std:.2f}")
     print(f"AFTER  ({total_timesteps} steps, greedy):  mean episode return = {trained_mean:8.2f} +/- {trained_std:.2f}")
     print("learned something" if trained_mean > base_mean else "no improvement")
