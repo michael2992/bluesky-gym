@@ -1,42 +1,15 @@
-"""
-First version of a new reward function 
-"""
-from bluesky_zoo.competition_v0 import CompetitionZooEnv
-import gymnasium as gym
-import bluesky_gym
-
-
-import numpy as np
+from bluesky_gym.envs.competition_env import CompetitionEnv
 import bluesky as bs
-import bluesky_gym.envs.common.functions as fn
-
-from gymnasium import spaces
-from gymnasium.utils import seeding
-from pettingzoo import ParallelEnv
-
 from core.tools import kwikqdrdist
-from core.scenario import ScenarioGenerator, agent_callsigns
-from core.observations import (
-    WaypointObservation, OwnAirspeedObservation, IntruderObservation,
-    ObstacleObservation, SectorBoundaryObservation,
-)
-from core.actions import HeadingAction, SpeedAction, combine_action_spaces
-from core.rendering import (
-    PygameCanvas, TopDownProjection,
-    draw_intruder, draw_polygon, draw_waypoint, draw_line,
-    BRIGHT_GREEN, SLATE_GRAY, LIGHT_GRAY, BLACK,
-)
+import bluesky_gym.envs.common.functions as fn
+import numpy as np
 
-NM2KM = 1.852
 
-class prototypeV1Env(CompetitionZooEnv):
-    """A prototype reward function for the competition.
+class prototypeSingleAgentV1Env(CompetitionEnv):
+    """A prototype reward function for the competition."""
 
-    This is a first attempt at a new reward function,  including a reward for moving towards the goal and removing the drift component.
-    """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    # def __init__(self, *args, **kwargs):
+    #     super().__init__(*args, **kwargs)
 
     def _get_reward(self, ac_id):
         """New reward function based on the initial base function instead with a new component based on distance moved towards target and with the drift component removed, 
@@ -45,7 +18,9 @@ class prototypeV1Env(CompetitionZooEnv):
         m = self.metrics[ac_id]
         base = self._reward_baseline[ac_id]
         ac_idx = bs.traf.id2idx(ac_id)
-        goal_lat, goal_lon = self._goal[ac_id]
+
+        # retrieve the goal lat and long from the scenario for the single agent
+        goal_lat, goal_lon =  self.scenario.agents[0].goal 
 
         qdr, _ = kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], goal_lat, goal_lon)
         drift_angle = np.deg2rad(fn.bound_angle_positive_negative_180(bs.traf.hdg[ac_idx] - qdr))

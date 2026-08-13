@@ -50,14 +50,21 @@ def make_env(kind, n_agents=N_AGENTS_MA):
     Do NOT change the fixed scoring params (intrusion_distance, episode_time_limit,
     distance_margin, n_intruders/n_agents, n_obstacles, ...).
     """
+    
     if kind == "sa":
-        import gymnasium as gym
-        import bluesky_gym
+        import gymnasium as gym # TODO asdfasd fix this the observation passed from the env is a dict but needs a box (maybe flatten?)
+        import bluesky_gym 
         bluesky_gym.register_envs()
-        return gym.make("CompetitionEnv-v0")
-    from bluesky_zoo.competition_v0 import CompetitionZooEnv
-    return CompetitionZooEnv(n_agents=n_agents)
+        from bluesky_zoo.competition.single_agent_prototype_v1 import prototypeSingleAgentV1Env
+        return prototypeSingleAgentV1Env(gym.make("CompetitionEnv-v0")) 
+    
+    # This was not working because i was trying to evaluate an MA model using an SA environment.
+    # TODO I need to train an SA model with a new script using train_zoo as an example, then i can load and evaluate that mode
+    
+    from bluesky_zoo.competition.prototypeV1 import prototypeV1Env
+    from train_zoo import FlattenObs
 
+    return (FlattenObs(prototypeV1Env(n_agents=n_agents)))
 
 def load_policy(kind, model_path=None):
     """Return an ``act(obs) -> action`` callable.
@@ -69,9 +76,16 @@ def load_policy(kind, model_path=None):
         model = PPO.load(model_path)
         return lambda obs: model.predict(obs, deterministic=True)[0]
     """
-    if model_path is not None:
-        raise NotImplementedError("load your trained policy in load_policy()")
-    return lambda obs: np.zeros(2, dtype=np.float32)
+    from stable_baselines3 import PPO
+
+    model_path = "ppo_competition"
+    model = PPO.load(model_path)
+
+
+    # if model_path is not None:
+    #     raise NotImplementedError("load your trained policy in load_policy()")
+    # return lambda obs: np.zeros(2, dtype=np.float32)
+    return lambda obs: model.predict(obs, deterministic=True)[0]
 # =============================================================================
 
 

@@ -28,6 +28,8 @@ from stable_baselines3.common.vec_env import VecMonitor
 from supersuit.vector.sb3_vector_wrapper import SB3VecEnvWrapper
 
 from bluesky_zoo.competition_v0 import CompetitionZooEnv
+from bluesky_zoo.competition.prototypeV1 import prototypeV1Env
+from scripts.evaluate_competition import summarize
 
 # For logging with Weights & Biases (wandb)
 import wandb
@@ -71,7 +73,7 @@ MODEL_PATH = "ppo_competition"
 
 
 def make_vec_env():
-    env = CompetitionZooEnv(render_mode=None, n_agents=N_AGENTS)
+    env = prototypeV1Env(render_mode=None, n_agents=N_AGENTS)
     env = FlattenObs(env)          # Dict obs -> flat Box, so plain MlpPolicy works
     env = ss.black_death_v3(env)   # keep terminated agents (zero-padded) until episode end
     env = ss.pettingzoo_env_to_vec_env_v1(env)   # -> N sub-envs, one shared policy
@@ -83,6 +85,7 @@ def evaluate(venv, n_episodes, model=None):
     """ Average per-agent episode return; random actions when model is None.
     """
     returns = []
+    records = []
     obs = venv.reset()
     while len(returns) < n_episodes:
         if model is None:
@@ -93,8 +96,42 @@ def evaluate(venv, n_episodes, model=None):
         for info in infos:
             if "episode" in info:            # VecMonitor logs a completed sub-env episode
                 returns.append(info["episode"]["r"])
-    return float(np.mean(returns)), float(np.std(returns))
+                records.append(dict(info))
+    return float(np.mean(returns)), float(np.std(returns)), records
 
+def summarize_dict(records, label):
+    """return a metrics table as a dict, adapted from official evaluate_competition.py. total_reward is reported separately
+    because it comes from the competitor-defined reward, so it is not
+    comparable across teams."""
+
+    METRIC_KEYS = [
+    "waypoint_reached", "flight_time",
+    "intrusion_events", "intrusion_time",
+    "restricted_area_events", "time_in_restricted_area",
+    "sector_exit_events", "time_outside_sector",
+    "total_reward",]
+
+    # Rows shown in the summary table: (label, metric key, transform).
+    SUMMARY_ROWS = [
+        ("Goal completion rate [%]", "waypoint_reached", lambda x: 100.0 * x),
+        ("Flight time [s]",          "flight_time",             None),
+        ("Intrusion events",         "intrusion_events",        None),
+        ("Intrusion time [s]",       "intrusion_time",          None),
+        ("Restricted-area events",   "restricted_area_events",  None),
+        ("Restricted-area time [s]", "time_in_restricted_area", None),
+        ("Sector-exit events",       "sector_exit_events",      None),
+        ("Time outside sector [s]",  "time_outside_sector",     None),
+    ]
+
+    n = len(records)
+    cols = {k: np.array([r[k] for r in records], dtype=float) for k in METRIC_KEYS}
+    recs = {}
+
+    for name, key, tf in SUMMARY_ROWS:
+        vals = tf(cols[key]) if tf else cols[key]
+        recs[key] = {"mean": vals.mean(), "std": vals.std()}
+
+    return recs
 
 def main(total_timesteps):
     np.random.seed(SEED)
@@ -106,7 +143,7 @@ def main(total_timesteps):
     config_wandb = {
         "policy_type": "MlpPolicy",
         "total_timesteps": total_timesteps,
-        "env_name": "CompetitionZooEnv",
+        "env_name": "testing_logging",
         "seed": SEED,
         "n_steps": 512,
         "batch_size": 128,
@@ -129,8 +166,9 @@ def main(total_timesteps):
     MODEL_PATH = f"models/{config_wandb['env_name']}/{run.id}"
 
     # Reference value before training to compare against
-    base_mean, base_std = evaluate(venv, EVAL_EPISODES)
+    base_mean, base_std, records = evaluate(venv, EVAL_EPISODES)
     print(f"\nBEFORE (random policy):  mean episode return = {base_mean:8.2f} +/- {base_std:.2f}")
+    summarize(records, f"runs/{config_wandb['env_name']}/{run.id}/before")
 
     # Define and train model
     model = PPO(
@@ -150,10 +188,17 @@ def main(total_timesteps):
     model.save(MODEL_PATH)
 
     # After training evaluation and comparisson against random policy
-    trained_mean, trained_std = evaluate(venv, EVAL_EPISODES, model=model)
-    metrics = {"eval/trained_mean": trained_mean, 
-                  "eval/trained_std": trained_std,}
-    run.log(metrics)
+    trained_mean, trained_std, trained_records = evaluate(venv, EVAL_EPISODES, model=model)
+    stats = {"eval/trained_mean": trained_mean, 
+                  "eval/trained_std": trained_std}
+
+    eval_metrics = summarize_dict(trained_records, f"runs/{config_wandb['env_name']}/{run.id}/after")
+    stats.update(eval_metrics)
+    summarize(trained_records, f"runs/{config_wandb['env_name']}/{run.id}/after")
+
+    
+    
+    run.log(stats)
     run.finish()
 
 
